@@ -1215,6 +1215,221 @@ it samples approximately:
 (372, 221)
 ```
 
+Reverse mapping does not mean samples can never repeat.
+
+Two output pixels may still sample the same source pixel if the warp compresses the image:
+
+```text
+output pixel 10 -> source pixel 50.2 -> samples source 50
+output pixel 11 -> source pixel 50.4 -> samples source 50
+```
+
+That is allowed. It means the source image is being compressed in that region.
+
+The important difference is:
+
+```text
+forward mapping:
+  some output pixels may never get assigned
+
+reverse mapping:
+  every output pixel computes a source coordinate and gets assigned a value
+```
+
+So reverse mapping guarantees output coverage, not perfect uniqueness.
+
+## 23.1 How The Sampling Estimate Works
+
+The warp matrix usually maps an output pixel to a non-integer source coordinate:
+
+```text
+output pixel:
+  (100, 50)
+
+source coordinate:
+  (372.4, 220.7)
+```
+
+But real image pixels live at integer grid positions:
+
+```text
+(372, 220)
+(373, 220)
+(372, 221)
+(373, 221)
+```
+
+So the code must estimate the pixel value at `(372.4, 220.7)`.
+
+There are two common ways:
+
+```text
+nearest-neighbor:
+  pick the closest source pixel
+
+bilinear interpolation:
+  blend the four nearest source pixels
+```
+
+openpilot's tinygrad warp uses nearest-neighbor here:
+
+```python
+x_round = Tensor.round(src_x)
+y_round = Tensor.round(src_y)
+```
+
+That means:
+
+```text
+(372.4, 220.7)
+  -> round
+  -> (372, 221)
+```
+
+Then it reads that source pixel.
+
+This is the "estimation":
+
+```text
+continuous source coordinate
+  -> nearest integer source pixel
+  -> sampled value
+```
+
+If the source coordinate goes outside the real image, the code clips it:
+
+```python
+x_nn_clipped = x_round.clip(0, w_src - 1).cast('int')
+y_nn_clipped = y_round.clip(0, h_src - 1).cast('int')
+```
+
+So:
+
+```text
+source x < 0:
+  use x = 0
+
+source x > image width:
+  use last valid x
+```
+
+That keeps memory access valid.
+
+## 23.2 Why Forward Mapping Can Mix Or Collide
+
+Forward mapping can also have collisions.
+
+Example:
+
+```text
+source pixel A -> output pixel 10
+source pixel B -> output pixel 10
+```
+
+Now two source pixels want to write into the same output pixel.
+
+The code would need a rule:
+
+```text
+which one wins?
+last write?
+average them?
+blend based on area?
+```
+
+At the same time, another output pixel may receive nothing:
+
+```text
+output pixel 11:
+  no source pixel landed here
+```
+
+So forward mapping has two problems:
+
+```text
+holes:
+  output pixels with no value
+
+collisions:
+  multiple source pixels fighting for one output pixel
+```
+
+Reverse mapping is simpler:
+
+```text
+each output pixel reads exactly one estimated source value
+```
+
+There can still be repeated reads from the same source pixel, but there are no write collisions because every output pixel writes only to itself.
+
+## 23.3 Warp Matrix Formula Broken Down
+
+This formula can look intimidating:
+
+```text
+[sx_raw]     [m00 m01 m02] [x]
+[sy_raw]  =  [m10 m11 m12] [y]
+[sw]         [m20 m21 m22] [1]
+```
+
+Break it into three equations:
+
+```text
+sx_raw = m00*x + m01*y + m02
+sy_raw = m10*x + m11*y + m12
+sw     = m20*x + m21*y + m22
+```
+
+Then:
+
+```text
+source_x = sx_raw / sw
+source_y = sy_raw / sw
+```
+
+What each part means:
+
+```text
+x, y:
+  pixel coordinate in the output/model image
+
+m00..m22:
+  the 9 numbers inside the warp matrix
+
+sx_raw, sy_raw:
+  temporary transformed coordinates
+
+sw:
+  perspective scale/depth term
+
+source_x, source_y:
+  final coordinate to sample from in the real camera image
+```
+
+If this were only rotate/scale/shift, `sw` would usually stay constant.
+
+Perspective warp allows `sw` to change with `x,y`, which lets straight image grids bend/skew like camera perspective.
+
+Simple mental model:
+
+```text
+normal 2D transform:
+  shift / rotate / zoom the image flatly
+
+perspective transform:
+  shift / rotate / zoom / skew as if the camera viewpoint changed
+```
+
+For openpilot:
+
+```text
+output/model pixel coordinate
+  -> 3x3 matrix
+  -> real-camera source coordinate
+  -> nearest-neighbor sample
+  -> output pixel value
+```
+
 ## 24. More Precise: NV12 Memory Layout
 
 NV12 is YUV 4:2:0 semi-planar format.
