@@ -1,0 +1,14 @@
+[
+  {
+    "slug": "model-beginner-codewalk",
+    "title": "Model Beginner Codewalk",
+    "summary": "From first principles: ONNX, image inputs, YUV/NV12, virtual camera geometry, warp matrix, and preprocessing.",
+    "file": "model-beginner-codewalk.md"
+  },
+  {
+    "slug": "model-walkthrough",
+    "title": "Driving Model Walkthrough",
+    "summary": "The full deployed model path: inputs, queues, output vector, parser, plan, action extraction, and controls challenge context.",
+    "file": "model-walkthrough.md"
+  }
+]
