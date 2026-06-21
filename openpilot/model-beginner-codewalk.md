@@ -1938,3 +1938,477 @@ It is:
 ```text
 YUV values arranged in a specific compact byte layout.
 ```
+
+## 25. What Comes Next: Runtime Model State
+
+So far, we understand the preprocessing path:
+
+```text
+real camera NV12 frame
+  -> warp into virtual model-camera image
+  -> pack YUV into model tensor
+```
+
+The next repo concept is:
+
+```text
+ModelState
+```
+
+Code reference:
+
+[ModelState class](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L75)
+
+`ModelState` is the object that owns the model runtime.
+
+It answers:
+
+```text
+Where is the compiled model loaded?
+Where are image/history queues stored?
+Where is the output parser stored?
+How does one camera tick become one model inference?
+Where is hidden_state saved for the next tick?
+```
+
+The mental transition is:
+
+```text
+compile_modeld.py:
+  defines preprocessing and queue helpers
+
+modeld.py / ModelState:
+  uses those helpers at runtime
+```
+
+## 26. `ModelState.__init__`: What Gets Created At Startup
+
+Constructor reference:
+
+[ModelState.__init__](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L78)
+
+Important code:
+
+```python
+jits = pickle.loads(read_file_chunked(modeld_pkl_path(usbgpu)))
+metadata = jits['metadata']
+self.input_shapes = metadata['input_shapes']
+self.output_slices = metadata['output_slices']
+```
+
+Meaning:
+
+```text
+load the compiled tinygrad model bundle
+read the model input shapes
+read the output slicing table
+```
+
+The compiled model bundle contains more than the neural net:
+
+```text
+metadata
+compiled run_policy function
+compiled warp function for this camera resolution
+```
+
+Then:
+
+```python
+self.frame_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
+```
+
+Code reference:
+
+[frame_skip](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L89)
+
+Given:
+
+```text
+MODEL_RUN_FREQ = 20
+MODEL_CONTEXT_FREQ = 5
+```
+
+Then:
+
+```text
+frame_skip = 4
+```
+
+Meaning:
+
+```text
+model can run at 20 Hz,
+but context history is sampled every 4 ticks,
+which gives 5 Hz history spacing.
+```
+
+Then:
+
+```python
+self.input_queues, self.npy = make_input_queues(...)
+```
+
+Code reference:
+
+[make_input_queues call](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L90)
+
+Meaning:
+
+```text
+create rolling buffers for image frames, feature history, desire history,
+and small numpy-backed inputs like traffic convention and action timing.
+```
+
+Then:
+
+```python
+self.parser = Parser()
+self.run_policy = jits['run_policy']
+self.warp_enqueue = jits[(cam_w,cam_h)]
+```
+
+Code references:
+
+[Parser setup](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L93)
+
+[compiled functions](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L95)
+
+Meaning:
+
+```text
+Parser:
+  turns raw output vector into named arrays
+
+run_policy:
+  runs the neural network
+
+warp_enqueue:
+  warps current camera frames and updates image queues
+```
+
+So startup creates:
+
+```text
+compiled model functions
+input queues
+metadata
+output parser
+state memory
+```
+
+## 27. Runtime Queues: Why They Exist
+
+The model does not receive only one isolated image.
+
+It receives:
+
+```text
+current images
+recent image history
+feature history
+desire history
+small context inputs
+```
+
+The queue helper starts here:
+
+[make_input_queues](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/compile_modeld.py#L145)
+
+Important code:
+
+```python
+input_queues.update({
+  'feat_q': Tensor(np.zeros((frame_skip * fb[1], fb[0], fb[2]), dtype=np.float32), device=device).contiguous().realize(),
+  'desire_q': Tensor(np.zeros((frame_skip * dp[1], dp[0], dp[2]), dtype=np.float32), device=device).contiguous().realize(),
+  'packed_npy_inputs': Tensor(packed_npy_inputs, device='NPY').realize(),
+})
+```
+
+Code reference:
+
+[feature/desire queues](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/compile_modeld.py#L155)
+
+Meaning:
+
+```text
+feat_q:
+  rolling buffer for previous hidden_state vectors
+
+desire_q:
+  rolling buffer for desire pulses
+
+packed_npy_inputs:
+  compact storage for small non-image inputs
+```
+
+The generic queue update is:
+
+[shift_and_sample](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/compile_modeld.py#L163)
+
+```python
+def shift_and_sample(buf, new_val, sample_fn):
+  buf.assign(buf[1:].cat(new_val, dim=0).contiguous())
+  return sample_fn(buf)
+```
+
+Plain English:
+
+```text
+drop the oldest item
+append the newest item
+sample the buffer into the exact model input shape
+```
+
+## 28. `ModelState.run`: One Tick Of Runtime
+
+Runtime method reference:
+
+[ModelState.run](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L102)
+
+This function is the per-frame model path.
+
+High-level:
+
+```text
+wrap camera buffers
+update small inputs
+warp images
+run neural network
+parse outputs
+save hidden_state
+return parsed outputs
+```
+
+### Step 1: Wrap Camera Buffer Without Copying
+
+Code reference:
+
+[Tensor.from_blob](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L104)
+
+```python
+ptr = np.frombuffer(bufs[key].data, dtype=np.uint8).ctypes.data
+...
+Tensor.from_blob(ptr, (yuv_size,), dtype='uint8', device=self.WARP_DEV)
+```
+
+Meaning:
+
+```text
+point tinygrad at the existing camera buffer memory
+instead of copying the full image into a new array
+```
+
+Why:
+
+```text
+real-time system
+large camera frames
+avoid unnecessary memory copies
+```
+
+### Step 2: Convert Desire Into A Pulse
+
+Code reference:
+
+[desire pulse logic](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L113)
+
+```python
+self.npy['desire'][:] = np.where(inputs['desire_pulse'] - self.prev_desire > .99, inputs['desire_pulse'], 0)
+self.prev_desire[:] = inputs['desire_pulse']
+```
+
+Meaning:
+
+```text
+only send the desire when it newly turns on
+```
+
+This is why it is called a pulse:
+
+```text
+lane-change-left starts:
+  send pulse once
+
+lane-change-left remains active:
+  send zero after the rising edge
+```
+
+### Step 3: Store Context Inputs And Warp Matrices
+
+Code reference:
+
+[context and transforms](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L117)
+
+```python
+self.npy['traffic_convention'][:] = inputs['traffic_convention']
+self.npy['action_t'][:] = inputs['action_t']
+self.npy['tfm'][:,:] = transforms['img'][:,:]
+self.npy['big_tfm'][:,:] = transforms['big_img'][:,:]
+```
+
+Meaning:
+
+```text
+traffic convention:
+  left-hand / right-hand traffic context
+
+action_t:
+  timing context
+
+tfm / big_tfm:
+  warp matrices for img and big_img
+```
+
+### Step 4: Warp Current Frames And Update Image Queues
+
+Code reference:
+
+[warp_enqueue call](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L122)
+
+```python
+img, big_img = self.warp_enqueue(..., frame=self.full_frames['img'], big_frame=self.full_frames['big_img'])
+```
+
+This calls the compiled warp function created by `compile_modeld.py`.
+
+The helper logic is:
+
+[warp_enqueue helper](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/compile_modeld.py#L180)
+
+```python
+warped_frame = frame_prepare(frame, tfm).unsqueeze(0)
+warped_big_frame = frame_prepare(big_frame, big_tfm).unsqueeze(0)
+...
+img = shift_and_sample(img_q, warped[0:1], sample_skip_fn)
+big_img = shift_and_sample(big_img_q, warped[1:2], sample_skip_fn)
+```
+
+Meaning:
+
+```text
+warp current img frame
+warp current big_img frame
+append them to image queues
+sample queues into model-ready img and big_img tensors
+```
+
+### Step 5: Run The Neural Network
+
+Code reference:
+
+[run_policy call](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L127)
+
+```python
+outs, = self.run_policy(...)
+model_output = outs.numpy()[0]
+```
+
+At this point, the neural network runs.
+
+Inputs include:
+
+```text
+img
+big_img
+features_buffer
+desire_pulse
+traffic_convention
+action_t
+```
+
+The helper constructs those inputs here:
+
+[run_policy inputs](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/compile_modeld.py#L199)
+
+```python
+inputs = {
+  'img': img,
+  'big_img': big_img,
+  'features_buffer': feat_buf,
+  'desire_pulse': desire_buf,
+  'traffic_convention': traffic_convention,
+  'action_t': action_t,
+}
+```
+
+### Step 6: Slice And Parse The Raw Output
+
+Code reference:
+
+[parse output](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L131)
+
+```python
+outputs_dict = self.parser.parse_outputs(self.slice_outputs(model_output, self.output_slices))
+```
+
+Meaning:
+
+```text
+raw vector from model
+  -> split into named slices
+  -> parse each slice into usable arrays/probabilities/distributions
+```
+
+We will cover this parser next.
+
+### Step 7: Save Hidden State For Next Tick
+
+Code reference:
+
+[hidden_state save](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L132)
+
+```python
+self.npy['prev_feat'][:] = model_output[self.output_slices['hidden_state']]
+```
+
+Meaning:
+
+```text
+take the model's 512-number hidden_state output
+save it as prev_feat
+feed it into the feature queue on the next tick
+```
+
+This closes the temporal loop:
+
+```text
+current frame
+  -> model
+  -> hidden_state
+  -> next frame's features_buffer
+```
+
+## 29. ModelState Summary
+
+`ModelState` is the bridge between preprocessing and inference:
+
+```text
+camera buffer
+  -> tinygrad tensor view
+  -> warp and image queue
+  -> feature/desire queues
+  -> neural network run
+  -> raw output vector
+  -> parsed outputs
+  -> hidden_state saved for next tick
+```
+
+The next repo topic after `ModelState` is:
+
+```text
+output parsing
+```
+
+That means:
+
+```text
+How does one raw 2576-value model output vector become:
+  plan
+  lane_lines
+  road_edges
+  lead
+  meta
+  desire_state
+  hidden_state
+```
