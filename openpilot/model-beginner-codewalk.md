@@ -1614,6 +1614,229 @@ destination[y, x] = source[round(source_y), round(source_x)]
 
 This happens for every destination pixel.
 
+## 23.7 The Estimation Problem
+
+The estimation problem exists because the warp matrix works in continuous coordinates, but images are stored on a discrete pixel grid.
+
+The matrix can return:
+
+```text
+source coordinate:
+  (372.4, 220.7)
+```
+
+But the source image only has stored values at:
+
+```text
+integer pixel centers:
+  (372, 220)
+  (373, 220)
+  (372, 221)
+  (373, 221)
+```
+
+So the code has to answer:
+
+```text
+What pixel value should represent the image at (372.4, 220.7)?
+```
+
+That is the estimation problem.
+
+### Nearest-Neighbor Estimate
+
+Nearest-neighbor is the simplest estimate:
+
+```text
+pick the closest real pixel
+```
+
+Example:
+
+```text
+(372.4, 220.7)
+  -> nearest integer pixel
+  -> (372, 221)
+```
+
+Pros:
+
+```text
+fast
+simple
+hardware-friendly
+does not blend values
+```
+
+Cons:
+
+```text
+can look blocky
+can alias fine details
+less smooth than interpolation
+```
+
+openpilot's tinygrad warp uses nearest-neighbor in this code path:
+
+```python
+x_round = Tensor.round(src_x)
+y_round = Tensor.round(src_y)
+```
+
+### Bilinear Estimate
+
+Bilinear interpolation is smoother.
+
+It looks at four nearby source pixels:
+
+```text
+(372, 220)   (373, 220)
+(372, 221)   (373, 221)
+```
+
+Then it blends them based on how close the decimal coordinate is to each one.
+
+If the coordinate is:
+
+```text
+(372.4, 220.7)
+```
+
+then the result is a weighted mix of those four pixels.
+
+Pros:
+
+```text
+smoother
+less blocky
+often better for visual quality
+```
+
+Cons:
+
+```text
+more compute
+more memory reads
+more complicated kernel
+blends sharp edges
+```
+
+For this model-preprocessing path, openpilot is using nearest-neighbor because this operation is part of a real-time inference pipeline.
+
+## 23.8 What If The Warp Stretches Or Compresses The Image?
+
+A perspective warp can stretch one region and compress another.
+
+### If It Compresses
+
+Multiple destination pixels may read the same source pixel:
+
+```text
+destination 10 -> source 50.2 -> source pixel 50
+destination 11 -> source 50.4 -> source pixel 50
+```
+
+This means:
+
+```text
+some source detail is being compressed
+```
+
+That is not a collision problem because both destination pixels are only reading from source. No two pixels are fighting to write to the same destination slot.
+
+### If It Stretches
+
+Adjacent destination pixels may sample source pixels farther apart:
+
+```text
+destination 10 -> source 50
+destination 11 -> source 53
+```
+
+This means:
+
+```text
+some source detail may be skipped
+```
+
+This is a normal resampling tradeoff. Any resize/warp operation has to choose how to estimate pixels when changing geometry.
+
+## 23.9 What If The Source Coordinate Is Outside The Real Image?
+
+Sometimes a destination pixel maps to a source coordinate outside the source image:
+
+```text
+source_x = -12
+source_y = 3000
+```
+
+That is invalid memory. The code must handle it.
+
+openpilot clips coordinates:
+
+```python
+x_nn_clipped = x_round.clip(0, w_src - 1).cast('int')
+y_nn_clipped = y_round.clip(0, h_src - 1).cast('int')
+```
+
+Meaning:
+
+```text
+if source_x < 0:
+  use 0
+
+if source_x > last column:
+  use last valid column
+
+if source_y < 0:
+  use 0
+
+if source_y > last row:
+  use last valid row
+```
+
+There is also optional border-fill logic:
+
+```python
+if border_fill_val is None:
+  return sampled
+```
+
+If a border value is provided, out-of-bounds pixels can be filled with a chosen value instead of clipped sampling.
+
+## 23.10 Why This Is Not A Model Decision
+
+This warp estimate is not the driving model "thinking."
+
+It is deterministic image preprocessing:
+
+```text
+same source image
+same warp matrix
+same sampling rule
+  -> same destination image
+```
+
+The neural network comes after this.
+
+The point of the warp is to provide a stable image format:
+
+```text
+real camera view
+  -> standardized virtual model-camera view
+```
+
+Then the model handles the actual learned driving task:
+
+```text
+model-ready image
+  -> visual features
+  -> temporal policy
+  -> future plan
+```
+
+So the warp's estimation problem is a computer-vision resampling problem, not an end-to-end driving decision.
+
 ## 24. More Precise: NV12 Memory Layout
 
 NV12 is YUV 4:2:0 semi-planar format.
