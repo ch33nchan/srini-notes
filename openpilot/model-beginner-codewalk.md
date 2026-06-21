@@ -1430,6 +1430,190 @@ output/model pixel coordinate
   -> output pixel value
 ```
 
+## 23.4 Important Naming: Output Image vs Neural Network Output
+
+In the warp explanation, "output pixel" does not mean the neural network's final driving output.
+
+It means:
+
+```text
+output of the warp operation
+```
+
+That warped image is created before the neural network runs.
+
+So the order is:
+
+```text
+real camera frame
+  -> warp operation
+  -> warped output image
+  -> packed tensor
+  -> neural network input
+  -> neural network output plan
+```
+
+The "output pixel" in reverse mapping is a pixel in this intermediate image:
+
+```text
+warped output image = model-ready camera image
+```
+
+Maybe clearer names:
+
+```text
+source image:
+  real camera image
+
+destination image:
+  virtual model-camera image
+```
+
+Reverse mapping means:
+
+```text
+for every destination pixel:
+  compute where to read from in the source image
+```
+
+## 23.5 Why Not Just Make Forward Mapping Approximate Too?
+
+You can do forward mapping, but it becomes more complicated.
+
+Forward mapping:
+
+```text
+for every source pixel:
+  compute where it lands in destination image
+```
+
+If the landing coordinate is non-integer:
+
+```text
+source pixel -> destination coordinate (10.3, 20.8)
+```
+
+you have choices:
+
+```text
+round to nearest destination pixel
+spread/splat into neighboring pixels
+accumulate weighted values
+normalize afterward
+run a hole-filling pass
+```
+
+If you simply round, you get holes and collisions:
+
+```text
+holes:
+  destination pixels nobody wrote to
+
+collisions:
+  destination pixels multiple source pixels wrote to
+```
+
+If you "splat" each source pixel across nearby destination pixels, you need extra bookkeeping:
+
+```text
+destination_value_sum
+destination_weight_sum
+final_value = destination_value_sum / destination_weight_sum
+```
+
+And even then, some destination pixels can still have:
+
+```text
+weight_sum = 0
+```
+
+which means:
+
+```text
+no source information landed there
+```
+
+Reverse mapping is simpler for image resampling:
+
+```text
+for each destination pixel:
+  compute source coordinate
+  sample source image
+```
+
+This naturally creates one value for every destination pixel.
+
+That is why reverse mapping is the standard approach for resize/warp/remap operations.
+
+## 23.6 Sampling From Source: Point 3 Re-explained
+
+At this stage, the real camera image already exists.
+
+The thing we are trying to create is:
+
+```text
+destination image:
+  the model-ready warped camera image
+```
+
+For one destination pixel:
+
+```text
+destination pixel = (x, y)
+```
+
+The warp matrix computes:
+
+```text
+source coordinate = (source_x, source_y)
+```
+
+Usually that source coordinate is decimal:
+
+```text
+(372.4, 220.7)
+```
+
+But source pixels are stored at integer positions:
+
+```text
+(372, 220)
+(373, 220)
+(372, 221)
+(373, 221)
+```
+
+So the code estimates the value.
+
+openpilot's tinygrad warp does nearest-neighbor:
+
+```text
+round source_x
+round source_y
+read that pixel
+```
+
+Example:
+
+```text
+source coordinate:
+  (372.4, 220.7)
+
+nearest integer pixel:
+  (372, 221)
+
+destination pixel value:
+  real_camera_image[221, 372]
+```
+
+So the destination image is built by repeatedly doing:
+
+```text
+destination[y, x] = source[round(source_y), round(source_x)]
+```
+
+This happens for every destination pixel.
+
 ## 24. More Precise: NV12 Memory Layout
 
 NV12 is YUV 4:2:0 semi-planar format.
