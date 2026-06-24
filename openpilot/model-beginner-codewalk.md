@@ -3219,3 +3219,325 @@ Where does modeld stop?
 Where do controllers begin?
 Why is the comma controls challenge related but separate?
 ```
+
+## 48. Controls Boundary: Where The Model Stops
+
+After `get_action_from_model`, the model side has produced:
+
+```text
+desiredCurvature
+desiredAcceleration
+shouldStop
+```
+
+This is still not:
+
+```text
+steering command
+gas command
+brake command
+```
+
+It is a motion target.
+
+The boundary is:
+
+```text
+modeld:
+  predicts desired motion
+
+controls:
+  tracks desired motion
+```
+
+So:
+
+```text
+modeld says:
+  "the path should curve this much"
+  "the acceleration should be this much"
+
+controllers answer:
+  "what steering/torque/accel output achieves that?"
+```
+
+## 49. Lateral Boundary: Curvature To Steering/Lataccel
+
+The model-side lateral target is:
+
+```text
+desiredCurvature
+```
+
+Different lateral controllers can use it differently.
+
+### Angle Controller
+
+Code reference:
+
+[latcontrol_angle update](https://github.com/commaai/openpilot/blob/master/selfdrive/controls/lib/latcontrol_angle.py#L16)
+
+Important line:
+
+```python
+angle_steers_des = math.degrees(VM.get_steer_from_curvature(-desired_curvature, CS.vEgo, params.roll))
+```
+
+Meaning:
+
+```text
+desired curvature
+  -> vehicle model
+  -> desired steering angle
+```
+
+This is where vehicle behavior starts to matter.
+
+The model did not output steering angle directly. The controller converts path curvature into a steering target using a vehicle model.
+
+### Torque Controller
+
+Code reference:
+
+[latcontrol_torque update](https://github.com/commaai/openpilot/blob/master/selfdrive/controls/lib/latcontrol_torque.py#L59)
+
+Important lines:
+
+```python
+measured_curvature = -VM.calc_curvature(...)
+measurement = measured_curvature * CS.vEgo ** 2
+future_desired_lateral_accel = desired_curvature * CS.vEgo ** 2
+...
+error = setpoint - measurement
+...
+output_lataccel = self.pid.update(...)
+output_torque = self.torque_from_lateral_accel(output_lataccel, self.torque_params)
+```
+
+Meaning:
+
+```text
+desired curvature
+  -> desired lateral acceleration
+  -> compare against measured lateral acceleration
+  -> PID/feedforward controller
+  -> steering torque output
+```
+
+The important relation:
+
+```text
+lateral acceleration ≈ curvature * speed^2
+```
+
+So the torque controller works in lateral-acceleration space because that maps more naturally to steering torque behavior.
+
+## 50. Longitudinal Boundary: Acceleration To Output Accel
+
+The model-side longitudinal target is:
+
+```text
+desiredAcceleration
+```
+
+Longitudinal controller code:
+
+[longcontrol update](https://github.com/commaai/openpilot/blob/master/selfdrive/controls/lib/longcontrol.py#L59)
+
+Important lines:
+
+```python
+error = a_target - CS.aEgo
+output_accel = self.pid.update(error, speed=CS.vEgo, feedforward=a_target)
+```
+
+Meaning:
+
+```text
+desired acceleration
+  -> compare with actual acceleration
+  -> PID/feedforward controller
+  -> output acceleration target
+```
+
+Again:
+
+```text
+model predicts target motion
+controller tracks target motion
+```
+
+## 51. Where E2E Acceleration Fits
+
+In longitudinal planning, openpilot can compare/use:
+
+```text
+MPC-derived acceleration target
+E2E model acceleration target
+```
+
+Code reference:
+
+[longitudinal_planner e2e action](https://github.com/commaai/openpilot/blob/master/selfdrive/controls/lib/longitudinal_planner.py#L149)
+
+Important lines:
+
+```python
+output_a_target_e2e = sm['modelV2'].action.desiredAcceleration
+output_should_stop_e2e = sm['modelV2'].action.shouldStop
+```
+
+Then in experimental mode:
+
+```python
+output_a_target = min(output_a_target_e2e, output_a_target_mpc)
+self.output_should_stop = output_should_stop_e2e or output_should_stop_mpc
+```
+
+Conceptual meaning:
+
+```text
+the model can provide an end-to-end acceleration/stop target,
+but planner/controller logic still bounds and integrates it with other control logic.
+```
+
+This reinforces the boundary:
+
+```text
+model output is a target,
+not raw pedal/brake actuation.
+```
+
+## 52. Why The Controls Challenge Is Related
+
+The comma controls challenge is about the lower half of this stack.
+
+openpilot model stack:
+
+```text
+camera/context/history
+  -> model
+  -> desired curvature / desired acceleration
+```
+
+controls challenge:
+
+```text
+desired lateral behavior
+  -> controller
+  -> simulated vehicle response
+  -> tracking cost
+```
+
+So the challenge is not asking:
+
+```text
+Can you train openpilot's vision model?
+```
+
+It asks something closer to:
+
+```text
+Given a target lateral acceleration/path behavior,
+can you produce steering actions that track it well?
+```
+
+That is why leaderboard methods include:
+
+```text
+PID + feedforward
+MPC
+optimized action sequences
+PPO
+evolution / Bayesian optimization
+```
+
+Those are controller strategies.
+
+For an RL/PufferLib project, this is useful because:
+
+```text
+observation:
+  vehicle state + target/future plan
+
+action:
+  steering command
+
+environment:
+  learned tiny physics simulator
+
+reward/cost:
+  tracking error + smoothness/jerk penalties
+```
+
+## 53. End-To-End Model Stack Summary
+
+The model stack we walked through is:
+
+```text
+1. Real camera frame arrives as NV12/YUV.
+
+2. openpilot separates Y, U, V image planes.
+
+3. A warp matrix maps the real camera view into the virtual model-camera view.
+
+4. Reverse mapping fills every destination/model-view pixel by sampling from the real camera image.
+
+5. The warped YUV image is packed into 6 channels per frame.
+
+6. Two frames become 12 channels for img and big_img.
+
+7. ModelState maintains rolling image, feature, and desire queues.
+
+8. run_policy feeds img, big_img, features_buffer, desire_pulse, traffic_convention, and action_t into the ONNX/tinygrad model.
+
+9. The model returns one raw vector.
+
+10. slice_outputs cuts the raw vector into named output heads.
+
+11. Parser converts raw heads using sigmoid, softmax, and MDN parsing.
+
+12. The parsed plan becomes desiredAcceleration and desiredCurvature.
+
+13. Controls code tracks those targets.
+```
+
+The most important split:
+
+```text
+model:
+  decides desired future motion
+
+controller:
+  makes the vehicle follow that desired motion
+```
+
+## 54. What To Study Next
+
+At this point, the model runtime stack is coherent.
+
+Next learning options:
+
+```text
+Option A:
+  go deeper into curvature/lateral acceleration/controllers
+
+Option B:
+  go into comma controls challenge and build a controller/RL environment
+
+Option C:
+  go into training theory: imitation learning, world models, learned simulation, policy training
+
+Option D:
+  inspect ONNX architecture visually with Netron
+```
+
+For your stated interest in comma.ai and RL/PufferLib, the strongest next path is:
+
+```text
+controls challenge
+  -> understand target tracking
+  -> implement PID/MPC baseline
+  -> wrap as RL environment
+  -> train PPO with PufferLib
+```
