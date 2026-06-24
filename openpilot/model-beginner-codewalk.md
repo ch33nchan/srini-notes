@@ -2412,3 +2412,366 @@ How does one raw 2576-value model output vector become:
   desire_state
   hidden_state
 ```
+
+## 30. Output Parsing: The Next Model Boundary
+
+The neural network returns one raw vector.
+
+For the normal driving model we inspected:
+
+```text
+outputs = (1, 2576)
+```
+
+That vector is not directly useful as-is.
+
+It is just:
+
+```text
+[number, number, number, number, ...]
+```
+
+Runtime needs to convert it into named outputs:
+
+```text
+meta
+desire_pred
+pose
+lane_lines
+road_edges
+lead
+hidden_state
+plan
+desire_state
+```
+
+This happens in two steps:
+
+```text
+1. slice the raw vector into named chunks
+2. parse each chunk into usable values/probabilities/distributions
+```
+
+The handoff happens here:
+
+[parse output call](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L131)
+
+```python
+outputs_dict = self.parser.parse_outputs(self.slice_outputs(model_output, self.output_slices))
+```
+
+Read that as:
+
+```text
+slice_outputs:
+  raw vector -> named raw chunks
+
+parse_outputs:
+  named raw chunks -> interpreted outputs
+```
+
+## 31. Step 1: `slice_outputs`
+
+Code reference:
+
+[slice_outputs](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L98)
+
+```python
+def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
+  parsed_model_outputs = {k: model_outputs[np.newaxis, v] for k,v in output_slices.items()}
+  return parsed_model_outputs
+```
+
+This is simple dictionary slicing.
+
+If metadata says:
+
+```text
+plan = slice(1576, 2566)
+```
+
+then:
+
+```text
+raw_output[1576:2566] -> outs["plan"]
+```
+
+If metadata says:
+
+```text
+hidden_state = slice(1064, 1576)
+```
+
+then:
+
+```text
+raw_output[1064:1576] -> outs["hidden_state"]
+```
+
+So:
+
+```text
+slice_outputs does not understand meaning.
+It only cuts the raw vector into named sections.
+```
+
+The meaning comes from the parser.
+
+## 32. Step 2: `Parser`
+
+Parser code:
+
+[Parser class](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/parse_model_outputs.py#L20)
+
+The parser has three main tools:
+
+```text
+sigmoid
+softmax
+MDN parser
+```
+
+These match different kinds of model outputs.
+
+## 33. Sigmoid: Binary Probabilities
+
+Code reference:
+
+[parse_binary_crossentropy](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/parse_model_outputs.py#L38)
+
+```python
+def parse_binary_crossentropy(self, name, outs):
+  raw = outs[name]
+  outs[name] = sigmoid(raw)
+```
+
+Sigmoid turns raw numbers into probabilities between 0 and 1.
+
+Use it for yes/no style outputs:
+
+```text
+lane line exists?
+lead exists?
+hard brake likely?
+driver may disengage?
+```
+
+Examples in code:
+
+[binary parses](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/parse_model_outputs.py#L101)
+
+```python
+self.parse_binary_crossentropy('lane_lines_prob', outs)
+self.parse_binary_crossentropy('meta', outs)
+self.parse_binary_crossentropy('lead_prob', outs)
+```
+
+Mental model:
+
+```text
+raw score:
+  can be any number
+
+sigmoid output:
+  probability-like value from 0 to 1
+```
+
+## 34. Softmax: Category Probabilities
+
+Code reference:
+
+[parse_categorical_crossentropy](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/parse_model_outputs.py#L30)
+
+```python
+def parse_categorical_crossentropy(self, name, outs, out_shape=None):
+  raw = outs[name]
+  if out_shape is not None:
+    raw = raw.reshape((raw.shape[0],) + out_shape)
+  outs[name] = softmax(raw, axis=-1)
+```
+
+Softmax turns a list of raw scores into probabilities that sum to 1.
+
+Use it for category choices:
+
+```text
+which desire state?
+which predicted desire class?
+```
+
+Examples in code:
+
+[desire parsing](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/parse_model_outputs.py#L102)
+
+```python
+self.parse_categorical_crossentropy('desire_pred', outs, out_shape=(ModelConstants.DESIRE_PRED_LEN,ModelConstants.DESIRE_PRED_WIDTH))
+```
+
+[desire_state parsing](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/parse_model_outputs.py#L114)
+
+```python
+self.parse_categorical_crossentropy('desire_state', outs, out_shape=(ModelConstants.DESIRE_PRED_WIDTH,))
+```
+
+Mental model:
+
+```text
+raw scores:
+  [2.1, -0.4, 0.7]
+
+softmax:
+  [0.73, 0.06, 0.21]
+```
+
+## 35. MDN: Prediction Plus Uncertainty
+
+MDN means:
+
+```text
+Mixture Density Network
+```
+
+The parser starts here:
+
+[parse_mdn](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/parse_model_outputs.py#L44)
+
+This is used for outputs where the model predicts continuous values:
+
+```text
+future plan positions
+lane line coordinates
+road edge coordinates
+lead trajectory
+pose
+road transform
+```
+
+Why not just output one number?
+
+Because continuous driving predictions have uncertainty.
+
+Example:
+
+```text
+lane marking is faded
+lead car is partially occluded
+future path is uncertain
+road edge is unclear
+```
+
+So MDN-style outputs include:
+
+```text
+mean prediction
+standard deviation / uncertainty
+possibly multiple hypotheses
+```
+
+In code:
+
+[MDN mean/std split](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/parse_model_outputs.py#L50)
+
+```python
+n_values = (raw.shape[2] - out_N)//2
+pred_mu = raw[:,:,:n_values]
+pred_std = safe_exp(raw[:,:,n_values: 2*n_values])
+```
+
+Translation:
+
+```text
+first part:
+  predicted values / means
+
+second part:
+  uncertainty values / standard deviations
+```
+
+`safe_exp` is used because the model stores std-like values in a form that needs exponentiation:
+
+[safe_exp](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/parse_model_outputs.py#L4)
+
+```python
+return np.exp(np.clip(x, -np.inf, 11), out=out)
+```
+
+The clip prevents exponent values from exploding numerically.
+
+## 36. Which Outputs Use MDN?
+
+Vision outputs:
+
+[parse_vision_outputs](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/parse_model_outputs.py#L95)
+
+```python
+self.parse_mdn('pose', outs, ...)
+self.parse_mdn('wide_from_device_euler', outs, ...)
+self.parse_mdn('road_transform', outs, ...)
+self.parse_mdn('lane_lines', outs, ...)
+self.parse_mdn('road_edges', outs, ...)
+self.parse_mdn('lead', outs, ...)
+```
+
+Policy output:
+
+[parse_policy_outputs](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/parse_model_outputs.py#L112)
+
+```python
+self.parse_mdn('plan', outs, in_N=0, out_N=0, out_shape=(ModelConstants.IDX_N, ModelConstants.PLAN_WIDTH))
+```
+
+This means the `plan` is parsed as:
+
+```text
+33 future points
+15 values per point
+plus corresponding uncertainty/std values
+```
+
+So after parsing, the output dictionary has:
+
+```text
+plan
+plan_stds
+```
+
+## 37. Parser Summary
+
+The parser is not the neural network.
+
+It is the decoder for the neural network's raw output.
+
+Clean flow:
+
+```text
+raw output vector
+  -> slice by metadata
+  -> sigmoid for binary probabilities
+  -> softmax for category probabilities
+  -> MDN parser for continuous predictions and uncertainty
+  -> output dictionary
+```
+
+After this, openpilot has usable model outputs:
+
+```text
+plan
+lane_lines
+road_edges
+lead
+meta
+desire_state
+hidden_state
+```
+
+The next repo topic after parsing is:
+
+```text
+plan-to-action conversion
+```
+
+That answers:
+
+```text
+How does the parsed future plan become desired curvature and desired acceleration?
+```
