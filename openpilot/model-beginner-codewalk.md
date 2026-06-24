@@ -2775,3 +2775,447 @@ That answers:
 ```text
 How does the parsed future plan become desired curvature and desired acceleration?
 ```
+
+## 38. Plan-To-Action Conversion
+
+After parsing, openpilot has a usable `plan`.
+
+Now it needs to convert that plan into the compact action target:
+
+```text
+desiredCurvature
+desiredAcceleration
+shouldStop
+```
+
+This happens here:
+
+[get_action_from_model](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L37)
+
+Important code:
+
+```python
+def get_action_from_model(model_output, prev_action, lat_action_t, long_action_t, v_ego):
+  if 'action' not in model_output:
+    plan = model_output['plan'][0]
+    desired_accel, should_stop = get_accel_from_plan(...)
+    desired_curvature = get_curvature_from_plan(...)
+  else:
+    desired_accel = model_output['action'][0,1]
+    desired_curvature = model_output['action'][0,0] / (max(1.0, v_ego))**2
+    should_stop = (v_ego < 0.3 and desired_accel < 0.1)
+```
+
+There are two possible paths:
+
+```text
+Path A:
+  model directly outputs action
+
+Path B:
+  model outputs plan, and runtime derives action from the plan
+```
+
+For the model metadata we inspected, the important path is:
+
+```text
+plan -> action
+```
+
+So focus on this:
+
+```text
+plan velocity/acceleration -> desired acceleration
+plan yaw/yaw-rate          -> desired curvature
+```
+
+## 39. What Is `desiredAcceleration`?
+
+Acceleration is the longitudinal target:
+
+```text
+speed up
+maintain speed
+slow down
+stop
+```
+
+The conversion happens here:
+
+[get_accel_from_plan](https://github.com/commaai/openpilot/blob/master/selfdrive/controls/lib/drive_helpers.py#L43)
+
+Call site:
+
+[desired_accel call](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L41)
+
+```python
+desired_accel, should_stop = get_accel_from_plan(
+  plan[:,Plan.VELOCITY][:,0],
+  plan[:,Plan.ACCELERATION][:,0],
+  ModelConstants.T_IDXS,
+  action_t=long_action_t
+)
+```
+
+Breakdown:
+
+```text
+plan[:, Plan.VELOCITY][:, 0]:
+  future x-direction speeds from the plan
+
+plan[:, Plan.ACCELERATION][:, 0]:
+  future x-direction accelerations from the plan
+
+ModelConstants.T_IDXS:
+  the future time points
+
+long_action_t:
+  the future time where we want the acceleration target
+```
+
+Inside `get_accel_from_plan`:
+
+```python
+v_now = speeds[0]
+a_now = accels[0]
+v_target = np.interp(action_t, t_idxs, speeds)
+a_target = 2 * (v_target - v_now) / (action_t) - a_now
+```
+
+Plain English:
+
+```text
+look at current planned speed
+look at planned speed at the action time
+compute the acceleration needed to get there smoothly
+```
+
+`np.interp` matters because the model plan has 33 discrete future points, but `action_t` may fall between two of those points.
+
+So:
+
+```text
+interpolation estimates the planned speed at exactly long_action_t
+```
+
+## 40. Why The Acceleration Formula Looks Weird
+
+The formula:
+
+```python
+a_target = 2 * (v_target - v_now) / action_t - a_now
+```
+
+comes from simple constant-jerk-ish motion reasoning.
+
+Do not overfocus on the derivation yet. The useful intuition is:
+
+```text
+given:
+  current speed
+  current acceleration
+  target future speed
+  time until that target
+
+compute:
+  acceleration command that points us toward the model's future speed
+```
+
+So the model does not say:
+
+```text
+press gas 12%
+```
+
+It says through the plan:
+
+```text
+the car should be moving at this future speed
+```
+
+Runtime converts that into:
+
+```text
+desired acceleration
+```
+
+## 41. `shouldStop`
+
+Inside `get_accel_from_plan`:
+
+[should_stop](https://github.com/commaai/openpilot/blob/master/selfdrive/controls/lib/drive_helpers.py#L56)
+
+```python
+should_stop = (v_now < vEgoStopping and a_target < 0.1)
+```
+
+Meaning:
+
+```text
+if we are already very slow
+and the target acceleration is not asking us to move meaningfully,
+then mark should_stop
+```
+
+This is a compact stop/hold-style signal derived from the longitudinal plan.
+
+## 42. What Is `desiredCurvature`?
+
+Curvature is the lateral target:
+
+```text
+how sharply the vehicle path should bend
+```
+
+Straight road:
+
+```text
+curvature = 0
+```
+
+Gentle turn:
+
+```text
+small curvature
+```
+
+Sharp turn:
+
+```text
+larger curvature
+```
+
+This is better than outputting steering angle directly because steering angle depends on vehicle-specific behavior.
+
+The model/runtime uses:
+
+```text
+desired path shape
+```
+
+not:
+
+```text
+raw actuator command
+```
+
+## 43. Curvature From The Plan
+
+Call site:
+
+[desired_curvature call](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L45)
+
+```python
+desired_curvature = get_curvature_from_plan(
+  plan[:,Plan.T_FROM_CURRENT_EULER][:,2],
+  plan[:,Plan.ORIENTATION_RATE][:,2],
+  ModelConstants.T_IDXS,
+  v_ego,
+  lat_action_t
+)
+```
+
+Breakdown:
+
+```text
+plan[:, Plan.T_FROM_CURRENT_EULER][:, 2]:
+  future yaw values from the plan
+
+plan[:, Plan.ORIENTATION_RATE][:, 2]:
+  current/future yaw-rate values from the plan
+
+v_ego:
+  current ego speed
+
+lat_action_t:
+  future time where we want the lateral target
+```
+
+Yaw means:
+
+```text
+heading angle of the car/path
+```
+
+Yaw rate means:
+
+```text
+how quickly heading is changing
+```
+
+If heading is changing, the path is curving.
+
+## 44. The Curvature Formula
+
+Helper code:
+
+[get_curvature_from_plan](https://github.com/commaai/openpilot/blob/master/selfdrive/controls/lib/drive_helpers.py#L64)
+
+```python
+def get_curvature_from_plan(yaws, yaw_rates, t_idxs, vego, action_t):
+  if action_t < MIN_STABLE_DELAY:
+    psi_target = (action_t / MIN_STABLE_DELAY) * np.interp(MIN_STABLE_DELAY, t_idxs, yaws)
+  else:
+    psi_target = np.interp(action_t, t_idxs, yaws)
+  psi_rate = yaw_rates[0]
+  return curv_from_psis(psi_target, psi_rate, vego, action_t)
+```
+
+Then:
+
+[curv_from_psis](https://github.com/commaai/openpilot/blob/master/selfdrive/controls/lib/drive_helpers.py#L59)
+
+```python
+def curv_from_psis(psi_target, psi_rate, vego, action_t):
+  vego = np.clip(vego, MIN_SPEED, np.inf)
+  curv_from_psi = psi_target / (vego * action_t)
+  return 2*curv_from_psi - psi_rate / vego
+```
+
+Plain English:
+
+```text
+look at where the plan says the heading/yaw should be at lat_action_t
+look at the current yaw rate
+use speed to convert heading change into path curvature
+```
+
+Why speed matters:
+
+```text
+the same heading change over the same time implies different curvature depending on speed
+```
+
+At higher speed, small curvature can create high lateral acceleration.
+
+Core relation:
+
+```text
+lateral acceleration ≈ curvature * speed^2
+```
+
+This is why the direct-action fallback divides by speed squared:
+
+[direct action curvature](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L51)
+
+```python
+desired_curvature = model_output['action'][0,0] / (max(1.0, v_ego))**2
+```
+
+That means:
+
+```text
+if direct model action is lateral acceleration-like,
+convert it to curvature by dividing by speed^2
+```
+
+## 45. Smoothing The Action
+
+After acceleration and curvature are computed:
+
+[smoothing](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L54)
+
+```python
+desired_accel = smooth_value(desired_accel, prev_action.desiredAcceleration, LONG_SMOOTH_SECONDS)
+if v_ego > MIN_LAT_CONTROL_SPEED:
+  desired_curvature = smooth_value(desired_curvature, prev_action.desiredCurvature, LAT_SMOOTH_SECONDS)
+else:
+  desired_curvature = prev_action.desiredCurvature
+```
+
+Acceleration is smoothed:
+
+```text
+avoid sudden jumps in desired acceleration
+```
+
+Curvature is only updated above a minimum speed:
+
+```text
+at very low speed, curvature math becomes unstable or less meaningful
+```
+
+The smoothing helper:
+
+[smooth_value](https://github.com/commaai/openpilot/blob/master/selfdrive/controls/lib/drive_helpers.py#L22)
+
+```python
+alpha = 1 - np.exp(-dt/tau) if tau > 0 else 1
+return alpha * val + (1 - alpha) * prev_val
+```
+
+Meaning:
+
+```text
+blend new target with previous target
+```
+
+## 46. Final Action Object
+
+Return code:
+
+[Action return](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L60)
+
+```python
+return log.ModelDataV2.Action(
+  desiredCurvature=float(desired_curvature),
+  desiredAcceleration=float(desired_accel),
+  shouldStop=bool(should_stop)
+)
+```
+
+So the model path has now become:
+
+```text
+parsed plan
+  -> desired acceleration
+  -> desired curvature
+  -> should stop
+```
+
+This is the boundary between:
+
+```text
+model prediction:
+  what motion should happen
+
+control system:
+  how to make the car follow that motion
+```
+
+## 47. Plan-To-Action Summary
+
+Full flow:
+
+```text
+model output vector
+  -> parser
+  -> plan
+  -> get_accel_from_plan
+  -> desiredAcceleration
+  -> get_curvature_from_plan
+  -> desiredCurvature
+  -> Action object
+```
+
+The most important distinction:
+
+```text
+The model does not output steering wheel angle.
+The model predicts future motion.
+Runtime converts future motion into curvature and acceleration targets.
+```
+
+The next repo topic is:
+
+```text
+controls boundary
+```
+
+That means:
+
+```text
+Where does modeld stop?
+Where do controllers begin?
+Why is the comma controls challenge related but separate?
+```
