@@ -10,5 +10,11 @@
     "title": "Driving Model Walkthrough",
     "summary": "The full deployed model path: inputs, queues, output vector, parser, plan, action extraction, and controls challenge context.",
     "file": "model-walkthrough.md"
+  },
+  {
+    "slug": "controls-challenge-core-rl",
+    "title": "Core RL With Controls Challenge",
+    "summary": "Formalize comma's controls challenge as an RL problem: MDP, observations, actions, rewards, PPO, residual RL, and evaluation.",
+    "file": "controls-challenge-core-rl.md"
   }
 ]
