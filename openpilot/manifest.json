@@ -1,8 +1,8 @@
 [
   {
     "slug": "core-rl-av-context",
-    "title": "Core RL AV Context",
-    "summary": "The from-scratch learning context: RL-first AV direction, curriculum, research habits, and how OpenPilot, PufferLib, and controls challenge connect.",
+    "title": "Master Context",
+    "summary": "Everything from the start to now: project intent, OpenPilot model learning, warp/YUV/ONNX concepts, controls bridge, and the RL-first roadmap.",
     "file": "core-rl-av-context.qmd"
   },
   {

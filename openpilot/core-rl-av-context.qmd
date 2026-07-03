@@ -1,6 +1,6 @@
 ---
-title: "Core RL for AV Full Stack"
-subtitle: "Learning context for OpenPilot, PufferLib, and comma controls"
+title: "OpenPilot + Core RL Master Context"
+subtitle: "From the first repo walkthrough to the current RL-first direction"
 project: "openpilot-rl"
 date: "2026-07-03"
 format:
@@ -9,133 +9,971 @@ format:
     theme: cosmo
 ---
 
-# Core RL for AV Full Stack
+# OpenPilot + Core RL Master Context
 
-This is the starting context for the project.
+This is the master context for the whole learning thread so far.
 
-The goal is not to build a shallow portfolio. The goal is to become credible as an engineer who can reason about autonomous driving systems and reinforcement learning from first principles, then turn that reasoning into working experiments.
+The goal is not to create a shallow portfolio page. The goal is to build a serious end-to-end project and learning track that presents strong engineering judgment for self-driving companies, especially comma.ai-style engineering, with reinforcement learning as the primary research skill.
 
-The current direction is:
+The current identity we are building toward is:
 
-1. Learn core reinforcement learning properly.
-2. Build deep RL intuition without hiding behind libraries.
-3. Understand PPO as an algorithm, not only as a training command.
-4. Use PufferLib as the practical training stack.
-5. Apply that skill to comma's controls challenge.
-6. Connect the result back to OpenPilot and the AV full stack.
+> RL-first autonomous driving engineer who understands the deployed AV stack, can read real production code, can formalize control problems as RL problems, and can run disciplined experiments.
 
-The guiding idea is simple:
+## Current North Star
 
-> OpenPilot gives the real-world AV system context. RL gives the optimization mindset. The controls challenge gives a small, measurable place to practice that mindset.
-
-## Working Agreement
-
-This project should be taught and documented in this order:
-
-1. Explain the concept first.
-2. Map the concept to equations or pseudocode.
-3. Map it to code or repo files.
-4. Update the notes only after the idea is clear.
-
-That matters because repo walkthroughs can become a dump of names, files, and symbols. The learning target is not memorizing paths. The target is being able to answer:
-
-1. What problem is this code solving?
-2. What assumptions does it make?
-3. What data flows through it?
-4. What is optimized?
-5. What can fail?
-6. How would I measure whether my change helped?
-
-## What We Already Covered
-
-We started with OpenPilot's model side, not the full car integration stack.
-
-The important mental model so far:
+The project direction is:
 
 ```text
-camera frames
-  -> image preprocessing
-  -> virtual camera warp
-  -> YUV / NV12 model input
-  -> ONNX model
-  -> model outputs
+OpenPilot system understanding
+  -> model-side code literacy
+  -> control boundary understanding
+  -> core RL fundamentals
+  -> PPO from first principles
+  -> PufferLib training stack
+  -> comma controls challenge experiments
+  -> research-style writeup and reproducible results
+```
+
+The important rule:
+
+```text
+concept first
+equation / pseudocode second
+repo code third
+notes update last
+```
+
+This rule exists because file lists alone do not teach the system. We need to understand what each part is doing, why it exists, what assumptions it makes, and how it can fail.
+
+## What Started This
+
+The first workspace context was an end-to-end driving project under `version-beta`, with notes, source code, checkpoints, and data folders. That project was not tracked by its own Git repo. The only Git repos on disk were dependency clones such as OpenPilot, Waymax, tinygrad, PufferDrive, CARLA-related folders, and other dependencies.
+
+The first stated goal was to present engineering ability to self-driving car companies and startups. The strongest stated interest was comma.ai and reinforcement learning with PufferLib.
+
+That created two parallel needs:
+
+1. Learn the OpenPilot ecosystem properly, not superficially.
+2. Build RL depth that can later become an applied AV control project.
+
+## Shift Away From Portfolio Thinking
+
+The project should not be described as only a portfolio.
+
+A portfolio usually says:
+
+```text
+here are finished artifacts
+```
+
+This project should say:
+
+```text
+here is a serious engineering/research process:
+  I read production AV code,
+  I formalized problems,
+  I built baselines,
+  I trained agents,
+  I evaluated failure modes,
+  I documented tradeoffs.
+```
+
+That difference matters. Self-driving teams care about judgment, debugging, evaluation discipline, and the ability to understand complex systems.
+
+## OpenPilot Repo Walkthrough: What We Chose To Focus On
+
+The first requested repo was:
+
+[commaai/openpilot](https://github.com/commaai/openpilot)
+
+The user asked to clone it, open it in VS Code, and walk through code one file at a time. The first attempt felt like a dump because it listed many files without enough algorithmic explanation.
+
+The corrected approach became:
+
+```text
+do not start with every process
+do not start with car wiring
+do not start with CAN / OBD
+start with the model path
+```
+
+So the OpenPilot learning focus became:
+
+1. camera image input
+2. image preprocessing
+3. virtual camera warp
+4. YUV / NV12 input format
+5. ONNX model contract
+6. temporal inputs
+7. model outputs
+8. parsing model predictions
+9. turning plan into action
+10. understanding where controls begin
+
+We intentionally postponed:
+
+1. OBD details
+2. CAN message plumbing
+3. full daemon/process architecture
+4. hardware setup
+5. car-specific integration
+
+This was a deliberate scope choice, not an omission.
+
+## OpenPilot Model Mental Model
+
+The high-level model path is:
+
+```text
+camera frame
+  -> real camera image buffer
+  -> virtual model-camera warp
+  -> YUV / NV12 handling
+  -> packed model tensor
+  -> ONNX / compiled model execution
+  -> raw model outputs
   -> parsed predictions
-  -> plan / desired motion
-  -> downstream control logic
+  -> plan
+  -> desired curvature / desired acceleration
+  -> controls boundary
 ```
 
-We intentionally de-emphasized car wiring, OBD, CAN details, daemon supervision, and hardware bring-up. Those are important in OpenPilot, but they are not the first learning target for this RL-first path.
-
-The OpenPilot model notes currently cover:
-
-1. Why camera images are warped into a model-friendly virtual camera view.
-2. Why reverse image mapping is used when sampling pixels.
-3. What YUV and NV12 mean at the input representation level.
-4. What ONNX is and why deployed models use it.
-5. How model outputs become structured predictions.
-6. Where the model boundary ends and controls begin.
-
-## What We Are Doing Next
-
-The next step is core RL from scratch.
-
-Before touching PufferLib or the comma controls challenge, the following words must become operational, not just familiar:
-
-1. State
-2. Action
-3. Reward
-4. Return
-5. Discount factor
-6. Policy
-7. Value function
-8. Advantage
-9. Bellman equation
-10. Exploration
-11. Credit assignment
-12. On-policy versus off-policy learning
-
-Operational means: given a new environment, we can define each item precisely and defend the choice.
-
-## The RL Problem Shape
-
-Reinforcement learning is about learning behavior through interaction.
-
-At each time step:
+The model is not simply:
 
 ```text
-agent observes state
-agent chooses action
-environment changes
-agent receives reward
-agent updates its future behavior
+picture -> steering
 ```
 
-The compact loop is:
+It is closer to:
 
 ```text
-s_t -> policy pi(a_t | s_t) -> a_t
+recent camera views
++ compact temporal memory
++ desire / navigation context
++ traffic-side convention
++ previous action context
+  -> predicted future scene and ego motion
+  -> plan and action-relevant outputs
+```
+
+That distinction matters. The model is doing prediction and planning-like output, not only direct joystick control.
+
+## The Model Inputs
+
+The deployed model contract includes multiple inputs.
+
+The important ones we discussed:
+
+```text
+img
+big_img
+features_buffer
+desire_pulse
+traffic_convention
+action_t
+```
+
+Reference:
+
+[OpenPilot model README](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/models/README.md)
+
+The beginner explanation:
+
+```text
+img:
+  recent model-camera visual stream
+
+big_img:
+  recent wide/big visual stream
+
+features_buffer:
+  learned temporal memory from previous model runs
+
+desire_pulse:
+  short signal for desired maneuver, such as lane change intent
+
+traffic_convention:
+  left-hand vs right-hand traffic context
+
+action_t:
+  previous action/context input used by the temporal policy
+```
+
+## `img` And `big_img`
+
+The confusing part was `big_img`.
+
+The key correction:
+
+```text
+big_img does not simply mean the tensor is bigger.
+```
+
+In the exported model contract we looked at, both `img` and `big_img` can have the same tensor shape:
+
+```text
+img      = (1, 12, 128, 256)
+big_img  = (1, 12, 128, 256)
+```
+
+The difference is conceptual/source-level:
+
+```text
+img:
+  normal model view
+
+big_img:
+  wider / alternate visual stream processed into the same model tensor shape
+```
+
+So `big_img` means:
+
+```text
+another visual stream, not necessarily a larger array at inference time
+```
+
+## Why 12 Channels
+
+The model uses two recent frames.
+
+Each frame is packed into 6 YUV-derived channels.
+
+So:
+
+```text
+6 channels per frame * 2 frames = 12 channels
+```
+
+The beginner version:
+
+```text
+one model frame:
+  YUV information packed into 6 channels
+
+two recent model frames:
+  12 total channels
+```
+
+The model does not receive a normal RGB image like:
+
+```text
+height x width x 3
+```
+
+It receives a packed video-camera-friendly representation that is efficient for the runtime system and aligned with training.
+
+## YUV
+
+YUV is a way to represent image information.
+
+It separates:
+
+```text
+Y = brightness / luma
+U = blue-ish color difference / chroma
+V = red-ish color difference / chroma
+```
+
+The simple version:
+
+```text
+Y tells how bright the pixel is.
+U and V tell color information.
+```
+
+This is common in camera and video systems because human vision is more sensitive to brightness detail than color detail. That means brightness can be stored at higher resolution and color can often be stored more compactly.
+
+## NV12
+
+NV12 is not a different color scale from YUV.
+
+The distinction is:
+
+```text
+YUV = what the numbers mean
+NV12 = how the YUV numbers are arranged in memory
+```
+
+NV12 stores:
+
+```text
+Y plane:
+  brightness for every pixel
+
+UV plane:
+  lower-resolution color data, with U and V interleaved
+```
+
+Memory layout:
+
+```text
+YYYYYYYYYYYY...
+UVUVUVUVUV...
+```
+
+So when OpenPilot receives camera frames in an NV12-like format, it must treat brightness and color planes correctly before packing the model input.
+
+## Planes, Not Driving Plans
+
+There was a naming confusion around "plane."
+
+In image processing:
+
+```text
+Y plane = brightness image
+U plane = color component image
+V plane = color component image
+```
+
+This is unrelated to a driving plan.
+
+In model output:
+
+```text
+plan = predicted future ego motion / path-like output
+```
+
+So:
+
+```text
+image plane:
+  one layer of image data
+
+driving plan:
+  model output about future motion
+```
+
+## Real Camera vs Virtual Model Camera
+
+This was one of the most important concepts.
+
+There is one real physical camera view coming from the device. But the model was trained expecting images that look like they came from a consistent virtual camera geometry.
+
+So OpenPilot does:
+
+```text
+real camera image
+  -> warp into virtual model camera view
+```
+
+The virtual camera is not another physical sensor. It is a coordinate convention.
+
+The point is to make the model see a stable view even if real camera calibration, mounting, or lens parameters differ slightly.
+
+## Camera Intrinsics
+
+Camera intrinsics describe how 3D rays project into 2D pixels.
+
+Important terms:
+
+```text
+focal length:
+  how zoomed-in or wide the camera projection is
+
+center point:
+  where the optical center lands in the image
+```
+
+The center point is measured in pixel coordinates inside the image.
+
+If the image coordinate system is:
+
+```text
+x grows left to right
+y grows top to bottom
+```
+
+then the center point is usually around:
+
+```text
+(image_width / 2, image_height / 2)
+```
+
+unless the camera calibration says the optical center is slightly shifted.
+
+In OpenPilot model geometry constants, names like `MEDMODEL_CY` and `medmodel_fl` refer to this virtual model camera projection:
+
+```text
+MEDMODEL_CY:
+  vertical center coordinate of the model camera
+
+medmodel_fl:
+  model camera focal length
+```
+
+## Warp Matrix
+
+The warp matrix is a 3x3 coordinate translator.
+
+It answers:
+
+```text
+for a pixel location in one image view,
+where is the corresponding location in another image view?
+```
+
+For the model preprocessing path, it is used to connect:
+
+```text
+real camera geometry
++ calibration
++ virtual model camera geometry
+= mapping between camera image and model image
+```
+
+Reference:
+
+[get_warp_matrix](https://github.com/commaai/openpilot/blob/master/common/transformations/model.py#L64)
+
+The conceptual formula:
+
+```text
+warp_matrix = camera_from_calib @ calib_from_model
+```
+
+Plain English:
+
+```text
+start in model-camera coordinates
+convert through calibrated road/device geometry
+end in real camera pixel coordinates
+```
+
+## Perspective Warp Coordinates
+
+A 3x3 perspective warp takes an output pixel coordinate:
+
+```text
+(x, y)
+```
+
+turns it into homogeneous coordinates:
+
+```text
+[x, y, 1]
+```
+
+multiplies by the matrix:
+
+```text
+[sx, sy, sw] = M * [x, y, 1]
+```
+
+then divides:
+
+```text
+source_x = sx / sw
+source_y = sy / sw
+```
+
+The division by `sw` is what allows perspective effects. It is more general than a simple shift, scale, or rotation.
+
+## Why Reverse Mapping
+
+This was the hardest concept and needed several re-explanations.
+
+The key naming correction:
+
+```text
+output image = output of the warp operation
+```
+
+It does not mean:
+
+```text
+neural network output
+```
+
+The warped image is created before the neural network runs.
+
+The preprocessing sequence is:
+
+```text
+real camera image
+  -> warp operation
+  -> warped output image
+  -> neural network input
+  -> neural network output
+```
+
+Reverse mapping means:
+
+```text
+for every pixel in the model-ready output image:
+  ask where it should come from in the real camera image
+  sample that source pixel
+  write it into this output pixel
+```
+
+Pseudocode:
+
+```text
+for y_out in output_height:
+  for x_out in output_width:
+    x_src, y_src = inverse_warp(x_out, y_out)
+    output[y_out, x_out] = sample(input, x_src, y_src)
+```
+
+Forward mapping would do:
+
+```text
+for every pixel in the real camera image:
+  compute where it lands in the model image
+  write it there
+```
+
+The problem with forward mapping is that transformed coordinates usually land between integer pixels. Some output pixels may receive no source pixel. Some may receive multiple source pixels. That creates holes and collision choices.
+
+Reverse mapping avoids the hole problem because it visits every output pixel exactly once. Each model-ready output pixel asks for its source.
+
+Important nuance:
+
+```text
+reverse mapping does not mean every source pixel is used exactly once
+```
+
+If the warp compresses an area, multiple output pixels can sample nearby or even the same source pixel. If the warp stretches an area, interpolation/nearest-neighbor choices estimate missing detail. But every output pixel gets assigned.
+
+## Sampling Estimate
+
+The warp matrix computes continuous coordinates.
+
+Example:
+
+```text
+output pixel (100, 50)
+  -> source coordinate (432.7, 211.2)
+```
+
+Images live on an integer grid:
+
+```text
+(432, 211)
+(433, 211)
+(432, 212)
+(433, 212)
+```
+
+So the warp must estimate the sampled value.
+
+Common methods:
+
+```text
+nearest neighbor:
+  choose the closest integer pixel
+
+bilinear:
+  blend the four surrounding pixels
+```
+
+The OpenPilot tinygrad warp path we studied uses nearest-neighbor-style sampling in this preprocessing path.
+
+Reference:
+
+[warp_perspective_tinygrad](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/compile_modeld.py#L50)
+
+## Warping Y, U, And V
+
+The warp is done plane by plane.
+
+It is not:
+
+```text
+warp the abstract idea of an image once
+```
+
+It is:
+
+```text
+real Y plane -> warped Y plane
+real U plane -> warped U plane
+real V plane -> warped V plane
+```
+
+Then those warped planes are packed into the model tensor.
+
+Reference anchors:
+
+1. [warp Y](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/compile_modeld.py#L103)
+2. [warp U](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/compile_modeld.py#L106)
+3. [warp V](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/compile_modeld.py#L109)
+4. [join YUV and pack tensor](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/compile_modeld.py#L112)
+
+The full preprocessing chain:
+
+```text
+real camera NV12 frame
+  -> split/read Y and UV layout
+  -> derive Y, U, V planes
+  -> warp Y into model view
+  -> warp U into model view
+  -> warp V into model view
+  -> rejoin / pack YUV
+  -> produce 6-channel model frame
+  -> combine two frames into 12-channel input
+```
+
+## ONNX
+
+ONNX is a model file format.
+
+It stores a neural network graph in a framework-independent form:
+
+```text
+PyTorch / training framework
+  -> export
+  -> ONNX file
+  -> inference runtime / compiler
+```
+
+An ONNX file contains:
+
+```text
+input names and shapes
+layers / operators
+weights
+output names and shapes
+graph structure
+```
+
+For an engineer analyzing a deployed ONNX model, the useful questions are:
+
+1. What are the inputs?
+2. What are the output tensors?
+3. What preprocessing creates the inputs?
+4. What postprocessing interprets the outputs?
+5. Which parts are temporal?
+6. Which outputs are directly used by controls?
+
+The main warning:
+
+```text
+the ONNX graph alone is not the whole system
+```
+
+In OpenPilot, preprocessing and output parsing are equally important.
+
+## Vision Encoder And Temporal Policy
+
+The model can be mentally split into:
+
+```text
+vision encoder:
+  turns camera tensors into learned visual features
+
+temporal policy / recurrent part:
+  uses current features plus memory/context to predict future outputs
+```
+
+The vision encoder answers:
+
+```text
+what is visually happening now?
+```
+
+The temporal policy answers:
+
+```text
+given current visual evidence and recent history,
+what future motion / scene / action-relevant outputs make sense?
+```
+
+This is why inputs like `features_buffer`, `desire_pulse`, and `action_t` matter. The model is not stateless.
+
+## `scene_feature`
+
+`scene_feature` is a learned compact representation.
+
+The practical mental model:
+
+```text
+raw image:
+  huge, pixel-level information
+
+scene_feature:
+  compressed learned summary useful for the model's temporal reasoning
+```
+
+It is not a human-written semantic label like:
+
+```text
+"lane is curved"
+```
+
+It is a neural feature vector learned during training.
+
+## Runtime: `ModelState`
+
+`ModelState` is the object that owns the model runtime path.
+
+Reference:
+
+[ModelState class](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L75)
+
+It owns:
+
+```text
+compiled model runner
+compiled warp function
+image queues
+feature buffers
+hidden state / temporal state
+input numpy buffers
+output parser
+```
+
+Runtime tick:
+
+```text
+wrap camera buffer
+create desire pulse
+store traffic/action/context inputs
+apply warp matrices
+warp current frames
+update image queues
+run model
+slice raw outputs
+parse outputs
+store hidden state for next tick
+```
+
+The key method:
+
+[ModelState.run](https://github.com/commaai/openpilot/blob/master/selfdrive/modeld/modeld.py#L102)
+
+## Output Parsing
+
+The model emits a large raw output vector. That vector is not readable by itself.
+
+The runtime must:
+
+```text
+slice output vector into named blocks
+apply parser logic
+convert logits into probabilities
+decode mixture density outputs
+fill model messages
+```
+
+Concepts covered:
+
+```text
+sigmoid:
+  binary probability
+
+softmax:
+  category probability distribution
+
+MDN:
+  mixture density network output, useful for multi-modal prediction and uncertainty
+```
+
+The important idea:
+
+```text
+model output is structured after parsing,
+not before parsing
+```
+
+## Plan To Action
+
+The model predicts future motion/plan-like outputs. Downstream code extracts action-relevant quantities.
+
+Important quantities:
+
+```text
+desiredAcceleration
+desiredCurvature
+shouldStop
+```
+
+Reference anchors:
+
+1. [get_accel_from_plan](https://github.com/commaai/openpilot/blob/master/selfdrive/controls/lib/drive_helpers.py#L43)
+2. [should_stop](https://github.com/commaai/openpilot/blob/master/selfdrive/controls/lib/drive_helpers.py#L56)
+3. [get_curvature_from_plan](https://github.com/commaai/openpilot/blob/master/selfdrive/controls/lib/drive_helpers.py#L64)
+4. [smooth_value](https://github.com/commaai/openpilot/blob/master/selfdrive/controls/lib/drive_helpers.py#L22)
+
+The plan-to-action path:
+
+```text
+parsed plan
+  -> desired acceleration
+  -> should stop decision
+  -> desired curvature
+  -> smoothing
+  -> action object
+```
+
+## Where The Model Stops
+
+The model does not directly turn the steering motor.
+
+The boundary is:
+
+```text
+model side:
+  predicts future plan / desired motion
+
+controls side:
+  tracks desired motion using vehicle-specific controller logic
+```
+
+For lateral control:
+
+```text
+desired curvature / lateral target
+  -> lateral controller
+  -> steering-related command
+```
+
+For longitudinal control:
+
+```text
+desired acceleration / stop behavior
+  -> longitudinal planner/controller
+  -> acceleration/brake-related command
+```
+
+This boundary matters because the comma controls challenge sits below the vision model.
+
+## How The Controls Challenge Connects
+
+The comma controls challenge is:
+
+[commaai/controls_challenge](https://github.com/commaai/controls_challenge)
+
+The challenge is not about training OpenPilot's vision model.
+
+It is about low-level control:
+
+```text
+given target lateral acceleration and current state,
+choose steering action
+so that the simulated car tracks the target smoothly
+```
+
+The challenge uses TinyPhysics, a learned/small simulator that predicts vehicle lateral acceleration response.
+
+Important challenge objects:
+
+```text
+State
+FuturePlan
+TinyPhysicsModel
+TinyPhysicsSimulator
+BaseController
+PID baseline controller
+```
+
+The challenge cost includes:
+
+```text
+lateral acceleration tracking cost
+jerk / smoothness cost
+```
+
+The challenge is relevant because it is a small, measurable AV control environment where RL can be applied without needing to train the entire OpenPilot stack.
+
+## Why We Deferred Controls Challenge Implementation
+
+We started looking at controls challenge, but then paused it.
+
+Reason:
+
+```text
+jumping straight to PPO or PufferLib would create another black box
+```
+
+The correct order is:
+
+```text
+core RL first
+then PPO
+then PufferLib
+then controls challenge implementation
+```
+
+This is especially important because good RL engineering depends on problem formulation, not just code.
+
+## Core RL Direction
+
+The current learning target is core RL.
+
+The core loop:
+
+```text
+state s_t
+  -> policy chooses action a_t
+  -> environment transitions
+  -> reward r_t
+  -> next state s_{t+1}
+```
+
+Compact notation:
+
+```text
+s_t -> pi(a_t | s_t) -> a_t
 a_t -> environment -> s_{t+1}, r_t
 ```
 
-The agent is not just predicting the next label. It is choosing actions that affect future states. That is the reason RL is harder than supervised learning.
-
-In supervised learning:
+The central difference from supervised learning:
 
 ```text
-input -> model -> prediction -> compare with known label
+supervised learning:
+  prediction is judged against a label
+
+reinforcement learning:
+  action changes the future, and reward may be delayed
 ```
 
-In RL:
+That delayed consequence is why RL is hard.
+
+## MDP
+
+MDP means Markov Decision Process.
+
+It defines:
 
 ```text
-state -> policy -> action -> new state -> delayed reward
+S:
+  state space
+
+A:
+  action space
+
+P:
+  transition dynamics
+
+R:
+  reward function
+
+gamma:
+  discount factor
 ```
 
-The central difficulty is delayed consequence. A steering action can look fine immediately and become bad one second later. RL exists because many decisions only make sense when judged across time.
+For the controls challenge:
+
+```text
+state:
+  current vehicle/control values and future target info
+
+action:
+  steering command
+
+transition:
+  TinyPhysics predicts next lateral acceleration
+
+reward:
+  negative cost from tracking error and jerk
+
+gamma:
+  how much future smoothness/tracking matters
+```
 
 ## Return
 
-The return is the future reward accumulated from a point in time.
+Return is accumulated future reward.
 
 Without discounting:
 
@@ -149,13 +987,7 @@ With discounting:
 G_t = r_t + gamma r_{t+1} + gamma^2 r_{t+2} + ...
 ```
 
-`gamma` is the discount factor.
-
-If `gamma` is close to `0`, the agent mainly cares about immediate reward.
-
-If `gamma` is close to `1`, the agent cares more about long-term consequences.
-
-For driving-style control, long-term consequence matters. Smooth steering and future path tracking cannot be judged from a single instant.
+For driving control, future behavior matters. A steering action may look good immediately but cause oscillation later.
 
 ## Policy
 
@@ -167,49 +999,41 @@ It answers:
 given the current state, what action should I take?
 ```
 
-For discrete actions:
+For stochastic policies:
 
 ```text
 pi(a | s) = probability of action a in state s
 ```
 
-For continuous actions, the policy usually outputs a distribution. For steering, that could mean:
+For continuous steering, a neural policy often outputs:
 
 ```text
-mean steering action
+mean action
 standard deviation / exploration scale
 ```
 
-During training, sampling from the distribution gives exploration. During evaluation, we often use the mean action for a cleaner deterministic result.
+During training, the agent samples actions. During evaluation, we often use the mean action.
 
 ## Value Function
 
-The value function estimates how good a state is.
+The value function estimates expected future return.
 
 ```text
 V(s) = expected future return starting from state s
 ```
 
-This is not a direct action command. It is a critic.
-
-In plain English:
+Plain English:
 
 ```text
-V(s) asks: if I am here, and I keep following my policy, how much future reward should I expect?
+if I am in this state and keep following my policy,
+how good is my future likely to be?
 ```
 
-For AV-style control, a good state might be:
-
-1. low lateral acceleration error
-2. low steering jerk
-3. stable future tracking
-4. no growing oscillation
-
-The value function is useful because it gives the policy a learning signal even when the final outcome is delayed.
+The value function is a critic, not the action itself.
 
 ## Advantage
 
-Advantage compares an action against the expected baseline for that state.
+Advantage asks whether an action was better or worse than expected.
 
 ```text
 A(s, a) = Q(s, a) - V(s)
@@ -218,194 +1042,259 @@ A(s, a) = Q(s, a) - V(s)
 Plain English:
 
 ```text
-Was this action better or worse than what I normally expect from this state?
+was this action better than the usual action from this state?
 ```
 
-This matters because raw rewards can be noisy. Advantage helps the policy update focus on whether a specific action was unusually good or bad.
+PPO relies heavily on advantage estimates.
 
-PPO depends heavily on advantage estimates.
+## Bellman Equation
 
-## Bellman Thinking
-
-Bellman thinking is the recursive heart of RL.
-
-The value of a state can be written as:
+Bellman thinking is:
 
 ```text
-value now = reward now + discounted value of what comes next
+value now = reward now + discounted value later
 ```
 
-As an equation:
+Equation:
 
 ```text
 V(s_t) = E[ r_t + gamma V(s_{t+1}) ]
 ```
 
-This is not just math decoration. It is the reason an agent can learn from partial rollouts instead of waiting for the entire future to unfold every time.
-
-When thinking like an RL engineer, always ask:
-
-1. What is the immediate reward?
-2. What future state does this action create?
-3. Is the policy improving long-term return or only gaming the local reward?
+This lets an agent learn from partial experience instead of waiting for the entire future every time.
 
 ## Why PPO Comes Later
 
-PPO should not be learned first.
+PPO combines many concepts:
 
-PPO combines many RL ideas:
+```text
+stochastic policy
+log probability
+policy ratio
+clipped objective
+value loss
+entropy bonus
+advantage estimation
+rollout buffer
+on-policy update
+```
 
-1. stochastic policies
-2. log probabilities
-3. policy ratios
-4. clipped objectives
-5. value loss
-6. entropy bonus
-7. advantage estimation
-8. rollout buffers
-9. on-policy updates
+If those concepts are not understood, PPO becomes a command-line ritual instead of an algorithm.
 
-If those pieces are not understood, PPO becomes a black box.
-
-The learning order should be:
+Correct learning order:
 
 ```text
 MDP
+  -> returns
   -> value functions
+  -> Bellman equations
+  -> Monte Carlo learning
+  -> temporal difference learning
   -> policy gradients
   -> actor-critic
   -> GAE
   -> PPO
-  -> PufferLib implementation
+  -> PufferLib
+  -> controls challenge
 ```
 
-PufferLib is useful after the algorithm is understood because it helps run many environments efficiently. It should not replace the mental model.
+## PufferLib Role
 
-## Controls Challenge Mapping
+PufferLib should be treated as a training systems tool.
 
-The comma controls challenge is a good applied target because it is small enough to study and hard enough to reveal control mistakes.
-
-The challenge can be viewed as an RL environment:
+It helps with:
 
 ```text
-observation:
-  current vehicle/control state and future target information
-
-action:
-  steering command
-
-environment:
-  TinyPhysics simulator
-
-reward:
-  negative tracking error and smoothness cost
+vectorized environments
+fast rollout collection
+agent/environment training loops
+scaling experiments
 ```
 
-The controller is judged by cost. RL usually maximizes reward, so the conversion is:
+It should not replace the RL mental model.
+
+The correct mindset:
 
 ```text
-reward = -cost
+understand the algorithm manually
+then use PufferLib to run it efficiently
 ```
 
-If the challenge cost is:
+Reference:
 
-```text
-total_cost = tracking_cost * 50 + jerk_cost
-```
-
-then a simple RL reward can start as:
-
-```text
-reward_t = -(50 * lateral_accel_error_t + jerk_penalty_t)
-```
-
-This must be handled carefully. Bad reward design can produce agents that exploit the metric instead of driving well.
+[PufferLib documentation](https://puffer.ai/docs.html)
 
 ## Researcher Mindset
 
-For this project, being a strong RL engineer means more than running training.
+The goal is not just:
 
-The expected habits are:
+```text
+make reward go up
+```
+
+The goal is:
+
+```text
+build a policy that improves real evaluation metrics
+and understand why it works or fails
+```
+
+The working habits:
 
 1. Define the MDP before writing the trainer.
-2. Start with a non-RL baseline.
-3. Make the simplest environment wrapper first.
-4. Overfit a tiny debug setup before scaling.
-5. Track training reward and evaluation cost separately.
-6. Use deterministic evaluation.
-7. Run multiple seeds.
-8. Inspect failure cases visually or numerically.
-9. Run ablations.
-10. Be suspicious of reward hacking.
+2. Start with a baseline such as PID.
+3. Reproduce the baseline locally.
+4. Build the smallest environment wrapper first.
+5. Overfit a tiny debug setting before scaling.
+6. Separate training reward from evaluation cost.
+7. Use deterministic evaluation.
+8. Run multiple seeds.
+9. Log failure cases.
+10. Run ablations.
+11. Watch for reward hacking.
+12. Keep experiments reproducible.
 
-The most important question is not:
-
-```text
-did the loss go down?
-```
-
-The better question is:
+The central question:
 
 ```text
-did the learned policy improve the actual evaluation metric without becoming brittle?
+did the learned policy improve the actual evaluation metric
+without becoming brittle?
 ```
 
-## Practical Curriculum
+## Current Notes Reader State
 
-The working curriculum is:
+A notes reader exists for this project.
 
-1. MDPs from scratch
-2. Return and discounting
-3. Value functions
-4. Bellman equations
-5. Monte Carlo learning
-6. Temporal difference learning
-7. Q-learning and SARSA
-8. Function approximation
-9. Policy gradients
-10. Actor-critic
-11. Advantage estimation
-12. PPO
-13. PufferLib training setup
-14. Controls challenge environment wrapper
-15. Baselines and evaluation
-16. Research-style experiments
-
-## Reference Links
-
-Primary references:
-
-1. [Sutton and Barto: Reinforcement Learning, An Introduction](http://incompleteideas.net/book/the-book.html)
-2. [OpenAI Spinning Up: Proximal Policy Optimization](https://spinningup.openai.com/en/latest/algorithms/ppo.html)
-3. [PufferLib documentation](https://puffer.ai/docs.html)
-4. [comma.ai controls challenge](https://github.com/commaai/controls_challenge)
-5. [comma.ai OpenPilot](https://github.com/commaai/openpilot)
-
-## Immediate Next Lesson
-
-The next teaching step should be:
+The OpenPilot section currently has:
 
 ```text
-MDP = Markov Decision Process
+Core RL AV Context
+Model Beginner Codewalk
+Driving Model Walkthrough
+Core RL With Controls Challenge
 ```
 
-We should explain it with a driving-control example:
+The current master context is this `.qmd` file.
+
+The reader supports Markdown-style rendering and now strips Quarto YAML front matter so `.qmd` files render cleanly.
+
+Local preview:
+
+[OpenPilot notes preview](http://127.0.0.1:4173/openpilot/#core-rl-av-context)
+
+Hosted project repo:
+
+[ch33nchan/srini-notes](https://github.com/ch33nchan/srini-notes)
+
+## Current Git / Publishing State
+
+The notes reader repo is tracked and pushed.
+
+Recent relevant commits:
+
+```text
+c808ab5 Add core RL controls challenge notes
+f28c97a Add core RL AV context note
+```
+
+This master context update should be committed after verification.
+
+## What Is Done
+
+Done so far:
+
+1. OpenPilot repo cloned and used for codewalk.
+2. Model-side learning path established.
+3. Beginner model notes created.
+4. Full model walkthrough notes created.
+5. Warp matrix, reverse mapping, YUV, and NV12 explained in detail.
+6. `ModelState` runtime flow explained.
+7. Output parsing explained.
+8. Plan-to-action boundary explained.
+9. Controls challenge connection identified.
+10. Core RL direction selected.
+11. Controls challenge implementation deferred until RL fundamentals are clear.
+12. Notes reader created and pushed.
+13. Quarto-style context note added.
+
+## What Is Not Done Yet
+
+Not done yet:
+
+1. Core RL lessons have not been completed.
+2. PPO has not been derived properly yet.
+3. PufferLib has not been used yet.
+4. Controls challenge environment wrapper has not been implemented.
+5. No RL baseline has been trained yet.
+6. No experiment report exists yet.
+
+This is fine. The project is still in the learning and formulation stage.
+
+## Immediate Next Step
+
+The next lesson should be MDPs.
+
+Start with:
+
+```text
+S, A, P, R, gamma
+```
+
+Then map it to a tiny driving-control example:
 
 ```text
 state:
-  what the controller knows right now
+  current lateral acceleration, target lateral acceleration, velocity, previous steering
 
 action:
   steering command
 
 transition:
-  how the simulated vehicle moves after the action
+  vehicle simulator response
 
 reward:
-  how good or bad that step was
+  negative tracking error and smoothness penalty
 
 discount:
-  how much future behavior matters
+  how much future stability matters
 ```
 
-Only after that should we touch PPO, PufferLib, or challenge implementation.
+Only after MDPs feel natural should we move to:
+
+```text
+return
+value
+Bellman equation
+TD learning
+policy gradient
+actor-critic
+PPO
+PufferLib
+controls challenge
+```
+
+## Reference Links
+
+Primary references:
+
+1. [comma.ai OpenPilot](https://github.com/commaai/openpilot)
+2. [comma.ai 0.11 release blog](https://blog.comma.ai/011release/)
+3. [comma.ai leaderboard](https://comma.ai/leaderboard)
+4. [comma.ai controls challenge](https://github.com/commaai/controls_challenge)
+5. [Sutton and Barto: Reinforcement Learning, An Introduction](http://incompleteideas.net/book/the-book.html)
+6. [OpenAI Spinning Up: PPO](https://spinningup.openai.com/en/latest/algorithms/ppo.html)
+7. [PufferLib documentation](https://puffer.ai/docs.html)
+
+## One-Screen Summary
+
+If returning to this project cold, remember this:
+
+```text
+We first tried to learn OpenPilot by walking the repo.
+That became overwhelming.
+We narrowed the scope to the model side.
+We learned camera preprocessing, YUV/NV12, virtual camera warping, ONNX inputs, temporal context, output parsing, and plan-to-action boundaries.
+Then we identified comma controls challenge as the right low-level control playground.
+But we paused implementation because PPO/PufferLib without core RL would be shallow.
+Now the correct next step is core RL from scratch, starting with MDPs.
+```
