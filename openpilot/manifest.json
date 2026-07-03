@@ -1,5 +1,11 @@
 [
   {
+    "slug": "core-rl-av-context",
+    "title": "Core RL AV Context",
+    "summary": "The from-scratch learning context: RL-first AV direction, curriculum, research habits, and how OpenPilot, PufferLib, and controls challenge connect.",
+    "file": "core-rl-av-context.qmd"
+  },
+  {
     "slug": "model-beginner-codewalk",
     "title": "Model Beginner Codewalk",
     "summary": "From first principles: ONNX, image inputs, YUV/NV12, virtual camera geometry, warp matrix, and preprocessing.",

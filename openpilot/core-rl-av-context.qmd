@@ -1,0 +1,411 @@
+---
+title: "Core RL for AV Full Stack"
+subtitle: "Learning context for OpenPilot, PufferLib, and comma controls"
+project: "openpilot-rl"
+date: "2026-07-03"
+format:
+  html:
+    toc: true
+    theme: cosmo
+---
+
+# Core RL for AV Full Stack
+
+This is the starting context for the project.
+
+The goal is not to build a shallow portfolio. The goal is to become credible as an engineer who can reason about autonomous driving systems and reinforcement learning from first principles, then turn that reasoning into working experiments.
+
+The current direction is:
+
+1. Learn core reinforcement learning properly.
+2. Build deep RL intuition without hiding behind libraries.
+3. Understand PPO as an algorithm, not only as a training command.
+4. Use PufferLib as the practical training stack.
+5. Apply that skill to comma's controls challenge.
+6. Connect the result back to OpenPilot and the AV full stack.
+
+The guiding idea is simple:
+
+> OpenPilot gives the real-world AV system context. RL gives the optimization mindset. The controls challenge gives a small, measurable place to practice that mindset.
+
+## Working Agreement
+
+This project should be taught and documented in this order:
+
+1. Explain the concept first.
+2. Map the concept to equations or pseudocode.
+3. Map it to code or repo files.
+4. Update the notes only after the idea is clear.
+
+That matters because repo walkthroughs can become a dump of names, files, and symbols. The learning target is not memorizing paths. The target is being able to answer:
+
+1. What problem is this code solving?
+2. What assumptions does it make?
+3. What data flows through it?
+4. What is optimized?
+5. What can fail?
+6. How would I measure whether my change helped?
+
+## What We Already Covered
+
+We started with OpenPilot's model side, not the full car integration stack.
+
+The important mental model so far:
+
+```text
+camera frames
+  -> image preprocessing
+  -> virtual camera warp
+  -> YUV / NV12 model input
+  -> ONNX model
+  -> model outputs
+  -> parsed predictions
+  -> plan / desired motion
+  -> downstream control logic
+```
+
+We intentionally de-emphasized car wiring, OBD, CAN details, daemon supervision, and hardware bring-up. Those are important in OpenPilot, but they are not the first learning target for this RL-first path.
+
+The OpenPilot model notes currently cover:
+
+1. Why camera images are warped into a model-friendly virtual camera view.
+2. Why reverse image mapping is used when sampling pixels.
+3. What YUV and NV12 mean at the input representation level.
+4. What ONNX is and why deployed models use it.
+5. How model outputs become structured predictions.
+6. Where the model boundary ends and controls begin.
+
+## What We Are Doing Next
+
+The next step is core RL from scratch.
+
+Before touching PufferLib or the comma controls challenge, the following words must become operational, not just familiar:
+
+1. State
+2. Action
+3. Reward
+4. Return
+5. Discount factor
+6. Policy
+7. Value function
+8. Advantage
+9. Bellman equation
+10. Exploration
+11. Credit assignment
+12. On-policy versus off-policy learning
+
+Operational means: given a new environment, we can define each item precisely and defend the choice.
+
+## The RL Problem Shape
+
+Reinforcement learning is about learning behavior through interaction.
+
+At each time step:
+
+```text
+agent observes state
+agent chooses action
+environment changes
+agent receives reward
+agent updates its future behavior
+```
+
+The compact loop is:
+
+```text
+s_t -> policy pi(a_t | s_t) -> a_t
+a_t -> environment -> s_{t+1}, r_t
+```
+
+The agent is not just predicting the next label. It is choosing actions that affect future states. That is the reason RL is harder than supervised learning.
+
+In supervised learning:
+
+```text
+input -> model -> prediction -> compare with known label
+```
+
+In RL:
+
+```text
+state -> policy -> action -> new state -> delayed reward
+```
+
+The central difficulty is delayed consequence. A steering action can look fine immediately and become bad one second later. RL exists because many decisions only make sense when judged across time.
+
+## Return
+
+The return is the future reward accumulated from a point in time.
+
+Without discounting:
+
+```text
+G_t = r_t + r_{t+1} + r_{t+2} + ...
+```
+
+With discounting:
+
+```text
+G_t = r_t + gamma r_{t+1} + gamma^2 r_{t+2} + ...
+```
+
+`gamma` is the discount factor.
+
+If `gamma` is close to `0`, the agent mainly cares about immediate reward.
+
+If `gamma` is close to `1`, the agent cares more about long-term consequences.
+
+For driving-style control, long-term consequence matters. Smooth steering and future path tracking cannot be judged from a single instant.
+
+## Policy
+
+The policy is the behavior rule.
+
+It answers:
+
+```text
+given the current state, what action should I take?
+```
+
+For discrete actions:
+
+```text
+pi(a | s) = probability of action a in state s
+```
+
+For continuous actions, the policy usually outputs a distribution. For steering, that could mean:
+
+```text
+mean steering action
+standard deviation / exploration scale
+```
+
+During training, sampling from the distribution gives exploration. During evaluation, we often use the mean action for a cleaner deterministic result.
+
+## Value Function
+
+The value function estimates how good a state is.
+
+```text
+V(s) = expected future return starting from state s
+```
+
+This is not a direct action command. It is a critic.
+
+In plain English:
+
+```text
+V(s) asks: if I am here, and I keep following my policy, how much future reward should I expect?
+```
+
+For AV-style control, a good state might be:
+
+1. low lateral acceleration error
+2. low steering jerk
+3. stable future tracking
+4. no growing oscillation
+
+The value function is useful because it gives the policy a learning signal even when the final outcome is delayed.
+
+## Advantage
+
+Advantage compares an action against the expected baseline for that state.
+
+```text
+A(s, a) = Q(s, a) - V(s)
+```
+
+Plain English:
+
+```text
+Was this action better or worse than what I normally expect from this state?
+```
+
+This matters because raw rewards can be noisy. Advantage helps the policy update focus on whether a specific action was unusually good or bad.
+
+PPO depends heavily on advantage estimates.
+
+## Bellman Thinking
+
+Bellman thinking is the recursive heart of RL.
+
+The value of a state can be written as:
+
+```text
+value now = reward now + discounted value of what comes next
+```
+
+As an equation:
+
+```text
+V(s_t) = E[ r_t + gamma V(s_{t+1}) ]
+```
+
+This is not just math decoration. It is the reason an agent can learn from partial rollouts instead of waiting for the entire future to unfold every time.
+
+When thinking like an RL engineer, always ask:
+
+1. What is the immediate reward?
+2. What future state does this action create?
+3. Is the policy improving long-term return or only gaming the local reward?
+
+## Why PPO Comes Later
+
+PPO should not be learned first.
+
+PPO combines many RL ideas:
+
+1. stochastic policies
+2. log probabilities
+3. policy ratios
+4. clipped objectives
+5. value loss
+6. entropy bonus
+7. advantage estimation
+8. rollout buffers
+9. on-policy updates
+
+If those pieces are not understood, PPO becomes a black box.
+
+The learning order should be:
+
+```text
+MDP
+  -> value functions
+  -> policy gradients
+  -> actor-critic
+  -> GAE
+  -> PPO
+  -> PufferLib implementation
+```
+
+PufferLib is useful after the algorithm is understood because it helps run many environments efficiently. It should not replace the mental model.
+
+## Controls Challenge Mapping
+
+The comma controls challenge is a good applied target because it is small enough to study and hard enough to reveal control mistakes.
+
+The challenge can be viewed as an RL environment:
+
+```text
+observation:
+  current vehicle/control state and future target information
+
+action:
+  steering command
+
+environment:
+  TinyPhysics simulator
+
+reward:
+  negative tracking error and smoothness cost
+```
+
+The controller is judged by cost. RL usually maximizes reward, so the conversion is:
+
+```text
+reward = -cost
+```
+
+If the challenge cost is:
+
+```text
+total_cost = tracking_cost * 50 + jerk_cost
+```
+
+then a simple RL reward can start as:
+
+```text
+reward_t = -(50 * lateral_accel_error_t + jerk_penalty_t)
+```
+
+This must be handled carefully. Bad reward design can produce agents that exploit the metric instead of driving well.
+
+## Researcher Mindset
+
+For this project, being a strong RL engineer means more than running training.
+
+The expected habits are:
+
+1. Define the MDP before writing the trainer.
+2. Start with a non-RL baseline.
+3. Make the simplest environment wrapper first.
+4. Overfit a tiny debug setup before scaling.
+5. Track training reward and evaluation cost separately.
+6. Use deterministic evaluation.
+7. Run multiple seeds.
+8. Inspect failure cases visually or numerically.
+9. Run ablations.
+10. Be suspicious of reward hacking.
+
+The most important question is not:
+
+```text
+did the loss go down?
+```
+
+The better question is:
+
+```text
+did the learned policy improve the actual evaluation metric without becoming brittle?
+```
+
+## Practical Curriculum
+
+The working curriculum is:
+
+1. MDPs from scratch
+2. Return and discounting
+3. Value functions
+4. Bellman equations
+5. Monte Carlo learning
+6. Temporal difference learning
+7. Q-learning and SARSA
+8. Function approximation
+9. Policy gradients
+10. Actor-critic
+11. Advantage estimation
+12. PPO
+13. PufferLib training setup
+14. Controls challenge environment wrapper
+15. Baselines and evaluation
+16. Research-style experiments
+
+## Reference Links
+
+Primary references:
+
+1. [Sutton and Barto: Reinforcement Learning, An Introduction](http://incompleteideas.net/book/the-book.html)
+2. [OpenAI Spinning Up: Proximal Policy Optimization](https://spinningup.openai.com/en/latest/algorithms/ppo.html)
+3. [PufferLib documentation](https://puffer.ai/docs.html)
+4. [comma.ai controls challenge](https://github.com/commaai/controls_challenge)
+5. [comma.ai OpenPilot](https://github.com/commaai/openpilot)
+
+## Immediate Next Lesson
+
+The next teaching step should be:
+
+```text
+MDP = Markov Decision Process
+```
+
+We should explain it with a driving-control example:
+
+```text
+state:
+  what the controller knows right now
+
+action:
+  steering command
+
+transition:
+  how the simulated vehicle moves after the action
+
+reward:
+  how good or bad that step was
+
+discount:
+  how much future behavior matters
+```
+
+Only after that should we touch PPO, PufferLib, or challenge implementation.

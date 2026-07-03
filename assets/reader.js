@@ -48,8 +48,12 @@ function closeList(state, html) {
   }
 }
 
+function stripFrontMatter(markdown) {
+  return markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+}
+
 function renderMarkdown(markdown) {
-  const lines = markdown.split(/\r?\n/);
+  const lines = stripFrontMatter(markdown).split(/\r?\n/);
   const html = [];
   const headings = [];
   const state = { code: false, codeLang: "", codeLines: [], list: null };
